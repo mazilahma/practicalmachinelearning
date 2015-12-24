@@ -1,0 +1,159 @@
+---
+title: "Practical Machine Learning - Course Project Write Up"
+author: "MazilahMA"
+date: "December 23, 2015"
+output: html_document
+---
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset)."
+
+The goal of your project is to predict the manner in which they did the exercise. This assignment will do the following:
+
+* create a report describing how the model is built
+* how cross validation is use
+* what is the expected out of sample error and why we made the choices we did
+* use prediction model to predict 20 different test cases 
+
+Set up the environment using the following chunk:
+
+```{r}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+
+testing<-read.csv(file="pml-testing.csv", na.strings=c("NA",""), head=TRUE,sep=",")
+training<-read.csv(file="pml-training.csv",na.strings=c("NA",""), head=TRUE,sep=",")
+```
+
+###Partioning the training set into two
+
+Partioning Training data set into two data sets, 60% for myTraining, 40% for myTesting:
+
+```{r}
+TrainData <- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+myTraining <- training[TrainData, ] 
+myTesting <- training[-TrainData, ]
+dim(myTraining) 
+dim(myTesting)
+```
+
+###Cleaning the data
+Reduce the number of features by removing variables with nearly zero variance, variables that are almost always NA, and variables that don't make intuitive sense for prediction.
+
+```{r}
+DataNZV <- nearZeroVar(myTraining, saveMetrics=TRUE)
+NZVvars <- names(myTraining) %in% c("new_window", "kurtosis_roll_belt", "kurtosis_picth_belt",
+"kurtosis_yaw_belt", "skewness_roll_belt", "skewness_roll_belt.1", "skewness_yaw_belt",
+"max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "avg_roll_arm", "stddev_roll_arm",
+"var_roll_arm", "avg_pitch_arm", "stddev_pitch_arm", "var_pitch_arm", "avg_yaw_arm",
+"stddev_yaw_arm", "var_yaw_arm", "kurtosis_roll_arm", "kurtosis_picth_arm",
+"kurtosis_yaw_arm", "skewness_roll_arm", "skewness_pitch_arm", "skewness_yaw_arm",
+"max_roll_arm", "min_roll_arm", "min_pitch_arm", "amplitude_roll_arm", "amplitude_pitch_arm",
+"kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "kurtosis_yaw_dumbbell", "skewness_roll_dumbbell",
+"skewness_pitch_dumbbell", "skewness_yaw_dumbbell", "max_yaw_dumbbell", "min_yaw_dumbbell",
+"amplitude_yaw_dumbbell", "kurtosis_roll_forearm", "kurtosis_picth_forearm", "kurtosis_yaw_forearm",
+"skewness_roll_forearm", "skewness_pitch_forearm", "skewness_yaw_forearm", "max_roll_forearm",
+"max_yaw_forearm", "min_roll_forearm", "min_yaw_forearm", "amplitude_roll_forearm",
+"amplitude_yaw_forearm", "avg_roll_forearm", "stddev_roll_forearm", "var_roll_forearm",
+"avg_pitch_forearm", "stddev_pitch_forearm", "var_pitch_forearm", "avg_yaw_forearm",
+"stddev_yaw_forearm", "var_yaw_forearm")
+myTraining <- myTraining[!NZVvars]
+dim(myTraining) #To check the new no of observations
+
+myTraining <- myTraining[c(-1)]
+trainingV3 <- myTraining #creating another subset to iterate in loop
+for(i in 1:length(myTraining)) { #for every column in the training dataset
+        if( sum( is.na( myTraining[, i] ) ) /nrow(myTraining) >= .6 ) { #if n?? NAs > 60% of total observations
+        for(j in 1:length(trainingV3)) {
+            if( length( grep(names(myTraining[i]), names(trainingV3)[j]) ) ==1)  { #if the columns are the same:
+                trainingV3 <- trainingV3[ , -j] #Remove column
+            }   
+        } 
+    }
+}
+dim(trainingV3)   #To check the new no of observations
+
+myTraining <- trainingV3  #Setting back to our set:
+rm(trainingV3)
+
+#transform myTesting and testing data sets
+clean1 <- colnames(myTraining)
+clean2 <- colnames(myTraining[, -58]) #already with classe column removed
+myTesting <- myTesting[clean1]
+testing <- testing[clean2]
+dim(myTesting) #To check the new no of observations
+dim(testing)
+```
+
+Coerce the data into the same type to ensure proper functioning of Decision Trees and RandomForest Algorithm with the Test data set
+
+```{r}
+for (i in 1:length(testing) ) {
+        for(j in 1:length(myTraining)) {
+        if( length( grep(names(myTraining[i]), names(testing)[j]) ) ==1)  {
+            class(testing[j]) <- class(myTraining[i])
+        }      
+    }      
+}
+testing <- rbind(myTraining[2, -58] , testing) #remove row 2
+testing <- testing[-1,]
+```
+
+###Machine Learning algorithms for prediction: Decision Tree
+
+Apply Decision Tree to gauge the performance.
+
+```{r}
+modFit1 <- rpart(classe ~ ., data=myTraining, method="class")
+fancyRpartPlot(modFit1)
+predictionsA <- predict(modFit1, myTesting, type = "class")  #predicting
+
+#Using confusion Matrix to test results
+confusionMatrix(predictionsA, myTesting$classe)  
+```
+
+The accuracy is 87.5%, thus the predicted accuracy for the out-of-sample error is 12.5%.
+
+###Machine Learning algorithms for prediction: Random Forests
+
+Apply Random Forest model, to see if it would have acceptable performance. Here, fit the model on mytraining and instruct the model to use 3-fold cross-validation to select optimal tuning parameters for the model.
+
+```{r}
+# instruct train to use 3-fold CV to select optimal tuning parameters
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+
+# fit model on mytraining
+modFit2 <- randomForest(classe ~. , data=myTraining, trControl=fitControl)
+#modFit2 <- train(classe ~ ., data=myTraining, method="rf", trControl=fitControl)
+#Predicting in-sample error
+predictionsB <- predict(modFit2, myTesting, type = "class")  
+
+#Using confusion Matrix to test results
+confusionMatrix(predictionsB, myTesting$classe)
+
+# Result of the random forest model
+print(modFit2, digits = 3)
+```
+
+The accuracy is 99.8%, thus the predicted accuracy for the out-of-sample error is 0.14%. So we choose **Random Forests** since it produce better results. Below is the formula to submit as answers for this project.
+
+predictionsB <- predict(modFit2, testing, type = "class")
+
+```{r}
+predictionsB <- predict(modFit2, testing, type = "class")
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:20){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictionsB)
+
+```
